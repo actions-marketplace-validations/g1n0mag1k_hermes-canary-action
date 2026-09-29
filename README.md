@@ -1,3 +1,5 @@
+![HIPAA](https://img.shields.io/badge/HIPAA-Safe%20Harbor%2016-blue) ![License](https://img.shields.io/github/license/g1n0mag1k/hermes-canary-action) ![GitHub Actions](https://img.shields.io/badge/GitHub%20Action-ready-green)
+
 # hermes-canary-action
 
 Zero-egress synthetic PHI canary tests and tamper-evident compliance receipts for healthtech CI/CD pipelines. Drop this composite GitHub Action into your workflow to verify that error monitoring scrubbers (for example Sentry `before_send`, Relay processors, or Drata CCT-linked policies) redact all **16 HIPAA Safe Harbor** identifier categories before telemetry leaves your boundary.
