@@ -2,9 +2,9 @@
 
 # hermes-canary-action
 
-Zero-egress synthetic PHI canary tests and tamper-evident compliance receipts for healthtech CI/CD pipelines. Drop this composite GitHub Action into your workflow to verify that error monitoring scrubbers (for example Sentry `before_send`, Relay processors, or Drata CCT-linked policies) redact all **16 HIPAA Safe Harbor** identifier categories before telemetry leaves your boundary.
+Zero-PHI-egress synthetic PHI canary tests and tamper-evident compliance receipts for healthtech CI/CD pipelines. Drop this composite GitHub Action into your workflow to verify that error monitoring scrubbers (for example Sentry `before_send`, Relay processors, or Drata CCT-linked policies) redact all **16 HIPAA Safe Harbor** identifier categories before telemetry leaves your boundary.
 
-## How zero-egress canary mechanics work
+## How zero-PHI-egress canary mechanics work
 
 Traditional PHI tests often require copying realistic patient data into staging or sending payloads to third-party observability vendors. That increases breach surface and complicates BAA scope.
 
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Hermes PHI canary
-        uses: your-org/hermes-canary-action@v1
+        uses: g1n0mag1k/hermes-canary-action@v1
         with:
           sentry-dsn: ${{ secrets.SENTRY_DSN }}
           ruleset: hipaa-safe-harbor-16
@@ -78,7 +78,7 @@ When you attach a **Hermes Relay Pro** API key, the action signs the receipt wit
 ```yaml
       - name: Run Hermes PHI canary (Relay Pro)
         id: canary
-        uses: your-org/hermes-canary-action@v1
+        uses: g1n0mag1k/hermes-canary-action@v1
         with:
           sentry-dsn: ${{ secrets.SENTRY_DSN }}
           hermes-api-key: ${{ secrets.HERMES_API_KEY }}
@@ -127,9 +127,12 @@ Each run writes `{output-dir}/{timestamp}_{receipt_id}.json`:
     "vectors_tested": 16,
     "canaries_intercepted": 16,
     "leaks_detected": 0
-  }
+  },
+  "hmac_sha256": ""
 }
 ```
+
+`hmac_sha256` is an empty string on the free tier. When `hermes-api-key` is set, it contains the HMAC-SHA256 hex digest of the canonical receipt JSON (with `hmac_sha256` treated as empty at signing time).
 
 Receipts are suitable as evidence for HIPAA **164.312(e)(1)** transmission integrity and SOC 2 **CC6.1** logical access / data protection control testing when paired with your scrubber configuration.
 

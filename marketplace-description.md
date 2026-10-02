@@ -102,7 +102,7 @@ Marketplace install counts appear on the Action’s Marketplace page once publis
 ### Security and threat model
 
 - [SECURITY.md](https://github.com/g1n0mag1k/hermes-canary-action/blob/main/SECURITY.md) — vulnerability reporting and supported versions.
-- [THREAT-MODEL.md](https://github.com/g1n0mag1k/hermes-canary-action/blob/main/THREAT-MODEL.md) — trust boundaries, zero-egress guarantees, and Pro signing.
+- [THREAT-MODEL.md](https://github.com/g1n0mag1k/hermes-canary-action/blob/main/THREAT-MODEL.md) — trust boundaries, zero-PHI-egress guarantees, and Pro signing.
 
 Questions: security@hermesrelay.dev
 
