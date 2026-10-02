@@ -11,11 +11,14 @@ import random
 import re
 import secrets
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
+
+RECEIPT_SCHEMA_VERSION = "1.0"
 
 CONTROLS_VERIFIED = ["HIPAA-164.312-e-1", "SOC2-CC6.1"]
 HERMES_TELEMETRY_URL = "https://api.hermesrelay.dev/v1/telemetry/receipt"
@@ -360,47 +363,47 @@ def _parse_sentry_dsn(dsn: str) -> Tuple[str, str]:
     return match.group("key"), match.group("host")
 
 
-def _run_canary_harness(ruleset: str, sentry_dsn: str) -> Tuple[str, Dict[str, int]]:
+def _run_canary_harness(
+    ruleset: str, sentry_dsn: str
+) -> Tuple[str, List[Tuple[CanaryVector, bool]]]:
     vectors = _load_ruleset(ruleset)
     scrub = _compose_scrubber(vectors)
 
-    leaks = 0
-    intercepted = 0
+    results: List[Tuple[CanaryVector, bool]] = []
     for vector in vectors:
         scrubbed = scrub(vector.sample)
-        if _vector_leaked(vector, scrubbed):
-            leaks += 1
-        else:
-            intercepted += 1
+        leaked = _vector_leaked(vector, scrubbed)
+        results.append((vector, leaked))
 
     if sentry_dsn:
         _verify_sentry_scrubber(sentry_dsn, scrub)
 
+    leaks = sum(1 for _, leaked in results if leaked)
     status = "PASSED" if leaks == 0 else "FAILED"
-    summary = {
-        "vectors_tested": len(vectors),
-        "canaries_intercepted": intercepted,
-        "leaks_detected": leaks,
-    }
-    return status, summary
+    return status, results
 
 
 def _build_receipt(
     status: str,
-    summary: Dict[str, int],
-    repository: str,
-    commit_sha: str,
-    timestamp: str,
-    receipt_id: str,
+    results: List[Tuple[CanaryVector, bool]],
 ) -> Dict[str, Any]:
-    """Build receipt JSON (schema includes hmac_sha256, empty until signed in main())."""
+    controls_verified = [vector.category for vector, leaked in results if not leaked]
+    leaks_detected = sum(1 for _, leaked in results if leaked)
+    intercepted = sum(1 for _, leaked in results if not leaked)
+    summary = {
+        "vectors_tested": len(results),
+        "canaries_intercepted": intercepted,
+        "leaks_detected": leaks_detected,
+    }
     return {
-        "receipt_id": receipt_id,
-        "timestamp": timestamp,
-        "repository": repository,
-        "commit_sha": commit_sha,
+        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "receipt_id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+        "commit_sha": os.environ.get("GITHUB_SHA", ""),
+        "ruleset": os.environ.get("RULESET", "hipaa-safe-harbor-16"),
         "status": status,
-        "controls_verified": CONTROLS_VERIFIED,
+        "controls_verified": controls_verified,
         "summary": summary,
         "hmac_sha256": "",
     }
@@ -412,12 +415,12 @@ def _canonical_json(payload: Dict[str, Any]) -> str:
 
 def _sign_receipt(payload: Dict[str, Any], secret: str) -> str:
     signing_body = {**payload, "hmac_sha256": ""}
-    digest = hmac.new(
+    canonical = json.dumps(signing_body, sort_keys=True, separators=(",", ":"))
+    return hmac.new(
         secret.encode("utf-8"),
-        msg=_canonical_json(signing_body).encode("utf-8"),
+        msg=canonical.encode("utf-8"),
         digestmod=hashlib.sha256,
     ).hexdigest()
-    return digest
 
 
 def _post_telemetry(payload: Dict[str, Any], api_key: str) -> None:
@@ -542,30 +545,15 @@ def main() -> int:
         "on",
     }
     output_dir = os.environ.get("OUTPUT_DIR", "./hermes-evidence")
-    repository = os.environ.get("GITHUB_REPOSITORY", "local/hermes-canary-action")
-    commit_sha = os.environ.get("GITHUB_SHA", "0000000000000000000000000000000000000000")
-
     try:
-        status, summary = _run_canary_harness(ruleset, sentry_dsn)
+        status, results = _run_canary_harness(ruleset, sentry_dsn)
     except Exception as exc:  # noqa: BLE001 — surface harness failures as FAILED receipt
         status = "FAILED"
-        summary = {
-            "vectors_tested": 16,
-            "canaries_intercepted": 0,
-            "leaks_detected": 16,
-        }
+        vectors = _default_canary_vectors()
+        results = [(vector, True) for vector in vectors]
         print(f"Hermes canary harness error: {exc}", file=sys.stderr)
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    receipt_id = f"rcpt-{secrets.token_hex(6)}"
-    receipt = _build_receipt(
-        status=status,
-        summary=summary,
-        repository=repository,
-        commit_sha=commit_sha,
-        timestamp=timestamp,
-        receipt_id=receipt_id,
-    )
+    receipt = _build_receipt(status, results)
 
     if hermes_api_key.strip():
         receipt["hmac_sha256"] = _sign_receipt(receipt, hermes_api_key.strip())
@@ -573,6 +561,8 @@ def main() -> int:
         receipt["hmac_sha256"] = ""
 
     os.makedirs(output_dir, exist_ok=True)
+    timestamp = receipt["timestamp"]
+    receipt_id = receipt["receipt_id"]
     safe_ts = timestamp.replace(":", "-")
     receipt_path = os.path.abspath(
         os.path.join(output_dir, f"{safe_ts}_{receipt_id}.json")
@@ -601,5 +591,42 @@ def main() -> int:
     return 0
 
 
+def _selftest_receipt() -> None:
+    """Smoke-test receipt schema and HMAC signing. Called only when HERMES_SELFTEST=1."""
+    import uuid
+
+    vectors = _default_canary_vectors()
+    fake_results = [(v, False) for v in vectors]  # all intercepted
+    receipt = _build_receipt("PASSED", fake_results)
+
+    assert receipt["schema_version"] == RECEIPT_SCHEMA_VERSION
+    assert receipt["status"] == "PASSED"
+    assert receipt["summary"]["leaks_detected"] == 0
+    assert receipt["summary"]["vectors_tested"] == 16
+    assert receipt["hmac_sha256"] == ""
+    assert len(receipt["controls_verified"]) == 16
+
+    secret = "test-secret-key"
+    sig = _sign_receipt(receipt, secret)
+    assert isinstance(sig, str) and len(sig) == 64
+
+    # Verify the signature matches manual computation
+    body = {**receipt, "hmac_sha256": ""}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    import hmac as _hmac, hashlib as _hashlib
+
+    expected = _hmac.new(
+        secret.encode("utf-8"),
+        msg=canonical.encode("utf-8"),
+        digestmod=_hashlib.sha256,
+    ).hexdigest()
+    assert _hmac.compare_digest(sig, expected), "Signature mismatch"
+
+    print("SELFTEST PASSED")
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    if os.environ.get("HERMES_SELFTEST") == "1":
+        _selftest_receipt()
+    else:
+        sys.exit(main())

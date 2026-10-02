@@ -120,18 +120,22 @@ Header: `X-Hermes-Signature-256` — HMAC-SHA256 of the canonical JSON body usin
 
 ## Receipt schema
 
-Each run writes `{output-dir}/{timestamp}_{receipt_id}.json`:
+Every run writes a JSON receipt to `output-dir` (default `./hermes-evidence`). Free tier receipts have `hmac_sha256: ""`. Pro receipts have a populated HMAC-SHA256 signature over the canonical receipt body.
 
 ```json
 {
-  "receipt_id": "rcpt-<12-hex-characters>",
-  "timestamp": "<ISO-8601-UTC-timestamp>",
-  "repository": "<GITHUB_REPOSITORY>",
-  "commit_sha": "<GITHUB_SHA>",
+  "schema_version": "1.0",
+  "receipt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": "2026-10-02T06:00:00Z",
+  "repository": "your-org/your-repo",
+  "commit_sha": "abc123",
+  "ruleset": "hipaa-safe-harbor-16",
   "status": "PASSED",
   "controls_verified": [
-    "HIPAA-164.312-e-1",
-    "SOC2-CC6.1"
+    "names", "dates", "phone_numbers", "fax", "email", "ssn",
+    "mrn", "health_plan_ids", "account_numbers", "license_numbers",
+    "vins", "device_serials", "web_urls", "ip_addresses",
+    "biometric_ids", "full_face_photos"
   ],
   "summary": {
     "vectors_tested": 16,
@@ -142,9 +146,21 @@ Each run writes `{output-dir}/{timestamp}_{receipt_id}.json`:
 }
 ```
 
-`hmac_sha256` is an empty string on the free tier. When `hermes-api-key` is set, it contains the HMAC-SHA256 hex digest of the canonical receipt JSON (with `hmac_sha256` treated as empty at signing time).
+## Verifying a Pro receipt
 
-Receipts are suitable as evidence for HIPAA **164.312(e)(1)** transmission integrity and SOC 2 **CC6.1** logical access / data protection control testing when paired with your scrubber configuration.
+```python
+import hmac, hashlib, json
+
+def verify_receipt(receipt: dict, api_key: str) -> bool:
+    body = {**receipt, "hmac_sha256": ""}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    expected = hmac.new(
+        api_key.encode("utf-8"),
+        msg=canonical.encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, receipt["hmac_sha256"])
+```
 
 ## Local development
 
