@@ -446,6 +446,91 @@ def _write_github_output(status: str, receipt_path: str) -> None:
         handle.write(f"receipt-path={receipt_path}\n")
 
 
+def _post_pr_comment(
+    status: str,
+    receipt: dict,
+    output_dir: str,
+) -> Optional[str]:
+    post_comment = os.environ.get("POST_COMMENT", "")
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    pr_number = os.environ.get("PR_NUMBER", "")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+
+    if post_comment != "true":
+        return None
+    if event_name != "pull_request":
+        return None
+    if not pr_number or not str(pr_number).strip():
+        return None
+    if not github_token or not github_token.strip():
+        print(
+            "::warning::post-comment=true but GITHUB_TOKEN is not set; skipping PR comment."
+        )
+        return None
+
+    summary = receipt.get("summary", {})
+    vectors_tested = summary.get("vectors_tested", 0)
+    canaries_intercepted = summary.get("canaries_intercepted", 0)
+    leaks_detected = summary.get("leaks_detected", 0)
+    ruleset = os.environ.get("RULESET", "hipaa-safe-harbor-16")
+    commit_sha = receipt.get("commit_sha", "")
+    receipt_path = output_dir
+
+    status_emoji = "✅" if status == "PASSED" else "❌"
+    leak_block = ""
+    if leaks_detected:
+        leak_block = (
+            "> ⚠️ **PHI leak detected.** One or more canary tokens survived "
+            "redaction. Review the receipt for details.\n"
+        )
+
+    comment_body = f"""## Hermes PHI Canary — {status_emoji} {status}
+
+| Field | Value |
+|-------|-------|
+| Vectors tested | {vectors_tested} |
+| Canaries intercepted | {canaries_intercepted} |
+| Leaks detected | {leaks_detected} |
+| Ruleset | {ruleset} |
+| Commit | `{commit_sha}` |
+| Receipt | `{receipt_path}` |
+
+{leak_block}
+---
+*[Hermes PHI Canary](https://hermesrelay.dev/canary) · Free tier · [Upgrade to Pro](https://hermesrelay.dev/canary) for signed receipts and drift detection*
+"""
+
+    url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments"
+    try:
+        response = requests.post(
+            url,
+            json={"body": comment_body},
+            headers={
+                "Authorization": f"Bearer {github_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=30,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"::warning::Hermes could not post PR comment: {exc}")
+        return None
+
+    if response.status_code == 201:
+        try:
+            data = response.json()
+            return data.get("html_url")
+        except Exception:  # noqa: BLE001
+            return None
+
+    print(
+        f"::warning::Hermes could not post PR comment: "
+        f"{response.status_code} {response.text}"
+    )
+    return None
+
+
 def main() -> int:
     ruleset = os.environ.get("RULESET", "hipaa-safe-harbor-16")
     sentry_dsn = os.environ.get("SENTRY_DSN", "")
@@ -506,6 +591,10 @@ def main() -> int:
 
     print(f"Hermes canary status: {status}")
     print(f"Receipt written to: {receipt_path}")
+
+    comment_url = _post_pr_comment(status, receipt, receipt_path)
+    with open(os.environ.get("GITHUB_OUTPUT", "/dev/null"), "a") as fh:
+        fh.write(f"comment-url={comment_url or ''}\n")
 
     if status == "FAILED" and fail_on_leak:
         return 1

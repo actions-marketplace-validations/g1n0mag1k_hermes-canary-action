@@ -39,6 +39,12 @@ No real patient data is used. Canary strings never leave the runner in cleartext
 | 15 | Biometric IDs | `BIO#` hex templates |
 | 16 | Full-face photos | `photo: data:image/…` markers |
 
+## Free tier
+
+- Full 16-category synthetic Safe Harbor canary harness
+- Local JSON compliance receipts on every run
+- PR comment with pass/fail summary
+
 ## Quick start
 
 ```yaml
@@ -70,6 +76,10 @@ jobs:
           name: hermes-receipt
           path: ./hermes-evidence/*.json
 ```
+
+### PR comment
+
+When triggered on a pull request, Hermes posts a pass/fail summary comment automatically (requires `pull-requests: write` permission). Set `post-comment: 'false'` to disable.
 
 ## Hermes Relay Pro and Drata CCT syncing
 

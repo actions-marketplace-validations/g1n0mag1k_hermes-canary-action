@@ -27,6 +27,10 @@ inputs:
     description: Directory where the JSON compliance receipt is written.
     required: false
     default: ./hermes-evidence
+  post-comment:
+    description: Post a pass/fail summary comment to the pull request. Requires contents:write and pull-requests:write permissions.
+    required: false
+    default: 'true'
 
 outputs:
   status:
@@ -35,6 +39,9 @@ outputs:
   receipt-path:
     description: Local filesystem path to the generated JSON receipt.
     value: ${{ steps.hermes-canary.outputs.receipt-path }}
+  comment-url:
+    description: URL of the pull request comment posted by Hermes, if any.
+    value: ${{ steps.hermes-canary.outputs.comment-url }}
 
 runs:
   using: composite
@@ -59,4 +66,8 @@ runs:
         OUTPUT_DIR: ${{ inputs.output-dir }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_SHA: ${{ github.sha }}
+        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        POST_COMMENT: ${{ inputs.post-comment }}
       run: python "${{ github.action_path }}/entrypoint.py"
