@@ -58,7 +58,7 @@ Add a job to your workflow:
 - uses: actions/checkout@v4
 
 - name: Run Hermes PHI canary
-  uses: your-org/hermes-canary-action@v1
+  uses: g1n0mag1k/hermes-canary-action@v1
   with:
     ruleset: hipaa-safe-harbor-16
     fail-on-leak: 'true'
@@ -93,7 +93,7 @@ The Free tier is installed directly from this repository or Marketplace without 
 
 1. Open the **hermes-canary-action** repository on GitHub.
 2. Go to **Insights → Traffic** (or **Community → Traffic** depending on UI).
-3. Review **GitHub Actions usage** / clone and referrer metrics alongside workflow forks referencing `uses: your-org/hermes-canary-action@…`.
+3. Review **GitHub Actions usage** / clone and referrer metrics alongside workflow forks referencing `uses: g1n0mag1k/hermes-canary-action@…`.
 
 Marketplace install counts appear on the Action’s Marketplace page once published. Use these signals for launch traction; they do not replace Pro billing metrics in Stripe.
 

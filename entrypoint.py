@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hermes PHI canary harness — synthetic Safe Harbor verification and receipt emission."""
+"""Hermes PHI canary harness — zero-PHI-egress synthetic Safe Harbor verification and receipt emission."""
 
 from __future__ import annotations
 
@@ -329,8 +329,8 @@ def _canonical_json(payload: Dict[str, Any]) -> str:
 def _sign_receipt(payload: Dict[str, Any], secret: str) -> str:
     digest = hmac.new(
         secret.encode("utf-8"),
-        _canonical_json(payload).encode("utf-8"),
-        hashlib.sha256,
+        msg=_canonical_json(payload).encode("utf-8"),
+        digestmod=hashlib.sha256,
     ).hexdigest()
     return digest
 
