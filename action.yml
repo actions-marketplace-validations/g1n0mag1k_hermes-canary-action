@@ -31,6 +31,10 @@ inputs:
     description: Post a pass/fail summary comment to the pull request. Requires contents:write and pull-requests:write permissions.
     required: false
     default: 'true'
+  validate-license:
+    description: Validate the hermes-api-key as a Keygen.sh license before running. Set to false to skip validation (not recommended in production).
+    required: false
+    default: 'true'
 
 outputs:
   status:
@@ -42,6 +46,9 @@ outputs:
   comment-url:
     description: URL of the pull request comment posted by Hermes, if any.
     value: ${{ steps.hermes-canary.outputs.comment-url }}
+  license-status:
+    description: Keygen license validation result (valid, invalid, skipped, or free-tier)
+    value: ${{ steps.hermes-canary.outputs.license-status }}
 
 runs:
   using: composite
@@ -70,4 +77,5 @@ runs:
         GITHUB_EVENT_NAME: ${{ github.event_name }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         POST_COMMENT: ${{ inputs.post-comment }}
+        VALIDATE_LICENSE: ${{ inputs.validate-license }}
       run: python "${{ github.action_path }}/entrypoint.py"

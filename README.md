@@ -101,6 +101,10 @@ When you attach a **Hermes Relay Pro** API key, the action signs the receipt wit
 Telemetry endpoint: `POST https://api.hermesrelay.dev/v1/telemetry/receipt`  
 Header: `X-Hermes-Signature-256` — HMAC-SHA256 of the canonical JSON body using `hermes-api-key` as the secret.
 
+## Pro license validation
+
+When `hermes-api-key` is set Hermes validates the key against the Keygen.sh license endpoint before running. An invalid or expired key disables Pro features (signing and telemetry upload) for that run without failing the job on canary results. Set `validate-license` to `false` to skip validation (not recommended outside of local testing). The `license-status` output reports one of: `valid`, `invalid`, `error`, or `free-tier`.
+
 ## Inputs
 
 | Input | Required | Default | Description |

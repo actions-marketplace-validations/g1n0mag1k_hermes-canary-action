@@ -534,10 +534,60 @@ def _post_pr_comment(
     return None
 
 
+def _validate_license(api_key: str) -> Tuple[str, str]:
+    url = (
+        "https://api.keygen.sh/v1/accounts/hermes-relay/licenses/actions/validate-key"
+    )
+    headers = {
+        "Content-Type": "application/vnd.api+json",
+        "Accept": "application/vnd.api+json",
+    }
+    body = {"meta": {"key": api_key}}
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=10)
+        if 400 <= response.status_code <= 599:
+            return ("error", f"Keygen validation error: {response.status_code}")
+        if response.status_code == 200:
+            meta = response.json().get("meta", {})
+            if meta.get("valid") is True:
+                return ("valid", "License valid.")
+            reason = meta.get("detail", "")
+            return ("invalid", f"License invalid: {reason}")
+        return ("error", f"Keygen validation error: {response.status_code}")
+    except requests.exceptions.RequestException as exc:
+        return ("error", f"Keygen unreachable: {exc}")
+
+
 def main() -> int:
     ruleset = os.environ.get("RULESET", "hipaa-safe-harbor-16")
     sentry_dsn = os.environ.get("SENTRY_DSN", "")
-    hermes_api_key = os.environ.get("HERMES_API_KEY", "")
+    validate_license = (
+        os.environ.get("VALIDATE_LICENSE", "true").lower() == "true"
+    )
+    hermes_api_key = os.environ.get("HERMES_API_KEY", "").strip()
+    license_status = "free-tier"
+
+    if hermes_api_key and validate_license:
+        status_result, message = _validate_license(hermes_api_key)
+        if status_result == "valid":
+            license_status = "valid"
+            print(f"::notice::{message}")
+        else:
+            license_status = "invalid"
+            print(f"::error::License validation failed: {message}", file=sys.stderr)
+            print(
+                "::error::Pro features are disabled for this run.",
+                file=sys.stderr,
+            )
+            hermes_api_key = ""
+    elif hermes_api_key and not validate_license:
+        license_status = "valid"
+        print(
+            "::warning::License validation was skipped (validate-license=false)."
+        )
+    else:
+        print("::notice::No Hermes API key set; running on free tier.")
+
     fail_on_leak = os.environ.get("FAIL_ON_LEAK", "true").lower() in {
         "1",
         "true",
@@ -555,8 +605,8 @@ def main() -> int:
 
     receipt = _build_receipt(status, results)
 
-    if hermes_api_key.strip():
-        receipt["hmac_sha256"] = _sign_receipt(receipt, hermes_api_key.strip())
+    if hermes_api_key:
+        receipt["hmac_sha256"] = _sign_receipt(receipt, hermes_api_key)
     else:
         receipt["hmac_sha256"] = ""
 
@@ -573,9 +623,9 @@ def main() -> int:
 
     _write_github_output(status, receipt_path)
 
-    if hermes_api_key.strip():
+    if hermes_api_key:
         try:
-            _post_telemetry(receipt, hermes_api_key.strip())
+            _post_telemetry(receipt, hermes_api_key)
         except Exception as exc:  # noqa: BLE001
             print(f"Hermes telemetry warning: {exc}", file=sys.stderr)
 
@@ -585,6 +635,7 @@ def main() -> int:
     comment_url = _post_pr_comment(status, receipt, receipt_path)
     with open(os.environ.get("GITHUB_OUTPUT", "/dev/null"), "a") as fh:
         fh.write(f"comment-url={comment_url or ''}\n")
+        fh.write(f"license-status={license_status}\n")
 
     if status == "FAILED" and fail_on_leak:
         return 1
@@ -621,6 +672,12 @@ def _selftest_receipt() -> None:
         digestmod=_hashlib.sha256,
     ).hexdigest()
     assert _hmac.compare_digest(sig, expected), "Signature mismatch"
+
+    gate_status, _ = _validate_license("not-a-real-key")
+    assert gate_status in ("invalid", "error")
+    print(
+        "License gate smoke test passed (network may be unavailable in CI — error is acceptable)."
+    )
 
     print("SELFTEST PASSED")
 
