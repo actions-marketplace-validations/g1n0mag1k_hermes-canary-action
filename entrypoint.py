@@ -536,7 +536,7 @@ def _post_pr_comment(
 
 def _validate_license(api_key: str) -> Tuple[str, str]:
     url = (
-        "https://api.keygen.sh/v1/accounts/hermes-relay/licenses/actions/validate-key"
+        "https://api.keygen.sh/v1/accounts/rogersandy90/licenses/actions/validate-key"
     )
     headers = {
         "Content-Type": "application/vnd.api+json",
