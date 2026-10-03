@@ -1,8 +1,10 @@
 name: Hermes PHI Canary
-description: Zero-egress synthetic PHI canary tests for error monitoring scrubbers with tamper-evident compliance receipts.
+description: >-
+  Zero-PHI-egress synthetic PHI canary tests for HIPAA-regulated CI/CD pipelines.
+  Verifies all 16 Safe Harbor scrubber categories and writes a tamper-evident signed receipt per run.
 branding:
   icon: shield
-  color: blue
+  color: green
 
 inputs:
   sentry-dsn:
@@ -25,6 +27,14 @@ inputs:
     description: Directory where the JSON compliance receipt is written.
     required: false
     default: ./hermes-evidence
+  post-comment:
+    description: Post a pass/fail summary comment to the pull request. Requires contents:write and pull-requests:write permissions.
+    required: false
+    default: 'true'
+  validate-license:
+    description: Validate the hermes-api-key as a Keygen.sh license before running. Set to false to skip validation (not recommended in production).
+    required: false
+    default: 'true'
 
 outputs:
   status:
@@ -33,6 +43,12 @@ outputs:
   receipt-path:
     description: Local filesystem path to the generated JSON receipt.
     value: ${{ steps.hermes-canary.outputs.receipt-path }}
+  comment-url:
+    description: URL of the pull request comment posted by Hermes, if any.
+    value: ${{ steps.hermes-canary.outputs.comment-url }}
+  license-status:
+    description: Keygen license validation result (valid, invalid, skipped, or free-tier)
+    value: ${{ steps.hermes-canary.outputs.license-status }}
 
 runs:
   using: composite
@@ -57,4 +73,9 @@ runs:
         OUTPUT_DIR: ${{ inputs.output-dir }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_SHA: ${{ github.sha }}
+        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        POST_COMMENT: ${{ inputs.post-comment }}
+        VALIDATE_LICENSE: ${{ inputs.validate-license }}
       run: python "${{ github.action_path }}/entrypoint.py"

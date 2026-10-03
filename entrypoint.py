@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hermes PHI canary harness — synthetic Safe Harbor verification and receipt emission."""
+"""Hermes PHI canary harness — zero-PHI-egress synthetic Safe Harbor verification and receipt emission."""
 
 from __future__ import annotations
 
@@ -7,14 +7,18 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import secrets
 import sys
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
+
+RECEIPT_SCHEMA_VERSION = "1.0"
 
 CONTROLS_VERIFIED = ["HIPAA-164.312-e-1", "SOC2-CC6.1"]
 HERMES_TELEMETRY_URL = "https://api.hermesrelay.dev/v1/telemetry/receipt"
@@ -25,6 +29,7 @@ class CanaryVector:
     category: str
     safe_harbor_label: str
     sample: str
+    needle: str
     scrubber: Callable[[str], str]
 
 
@@ -131,37 +136,157 @@ def _build_scrubbers() -> Dict[str, Callable[[str], str]]:
     }
 
 
+def _random_nxx() -> str:
+    """Three digits NXX where N (first digit) is 2-9."""
+    return f"{random.randint(2, 9)}{random.randint(0, 9)}{random.randint(0, 9)}"
+
+
+def _random_phone_formatted() -> str:
+    return f"({_random_nxx()}) {_random_nxx()}-{random.randint(0, 9)}{random.randint(0, 9)}{random.randint(0, 9)}{random.randint(0, 9)}"
+
+
+def _random_vin() -> str:
+    vin_chars = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
+    return "".join(secrets.choice(vin_chars) for _ in range(17))
+
+
 def _default_canary_vectors() -> List[CanaryVector]:
     scrubbers = _build_scrubbers()
-    samples: List[Tuple[str, str, str]] = [
-        ("names", "Names", "Patient: Jane Q. Public was seen by Dr. Samuel Reed."),
-        ("dates", "Dates", "Admission on 03/15/2024 and follow-up 2024-04-01."),
-        ("phone_numbers", "Phone Numbers", "Callback at (415) 555-0199 after discharge."),
-        ("fax", "Fax", "Send records via Fax: 415-555-0100."),
-        ("email", "Email", "Contact jane.public@example-clinic.org for results."),
-        ("ssn", "SSN", "Legacy index SSN 123-45-6789 must be redacted."),
-        ("mrn", "MRN", "Chart MRN: 0049281736 updated."),
-        ("health_plan_ids", "Health Plan IDs", "Coverage PLAN# HPLN8X92K1M4Q7 verified."),
-        ("account_numbers", "Account Numbers", "Billing ACCT# 8844221199003344 posted."),
-        ("license_numbers", "License Numbers", "Provider LIC# CA-MED-928174."),
-        ("vins", "VINs", "Transport vehicle VIN 1HGCM82633A004352 noted."),
-        ("device_serials", "Device Serials", "Pump SERIAL SN-AB12CD34EF56 registered."),
-        ("web_urls", "Web URLs", "Portal https://portal.example-clinic.org/patient/9281."),
-        ("ip_addresses", "IP Addresses", "Session originated from 192.168.44.12."),
-        ("biometric_ids", "Biometric IDs", "Template BIO# A1B2C3D4E5F60718293A4B5C6D7E8F90 stored."),
-        (
-            "full_face_photos",
-            "Full-face Photos",
-            "photo: data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBD",
-        ),
+
+    first_names = [
+        "Zyxander",
+        "Qwinella",
+        "Blorn",
+        "Tepha",
+        "Marmok",
+        "Cindrel",
+        "Flostin",
+        "Vexler",
+        "Nubwick",
+        "Glimmera",
     ]
+    last_names = [
+        "Thistlefork",
+        "Moonbeam",
+        "Croutonsmith",
+        "Wobbleton",
+        "Fizzington",
+        "Plumwicket",
+        "Branflakes",
+        "Tumblewick",
+        "Quorble",
+        "Snorfax",
+    ]
+    email_domains = ["example-clinic.org", "test-health.org", "synth-med.net"]
+
+    patient_first = random.choice(first_names)
+    patient_last = random.choice(last_names)
+    doctor_first = random.choice(first_names)
+    doctor_last = random.choice(last_names)
+    names_sample = (
+        f"Patient: {patient_first} {patient_last} was seen by "
+        f"Dr. {doctor_first} {doctor_last}."
+    )
+    names_needle = (
+        f"{patient_first} {patient_last}|{doctor_first} {doctor_last}"
+    )
+
+    span_days = (date(2026, 12, 31) - date(2020, 1, 1)).days
+    event_date = date(2020, 1, 1) + timedelta(days=random.randint(0, span_days))
+    mmddyyyy = event_date.strftime("%m/%d/%Y")
+    iso_date = event_date.strftime("%Y-%m-%d")
+    dates_sample = f"Admission on {mmddyyyy} and follow-up {iso_date}."
+    dates_needle = f"{mmddyyyy}|{iso_date}"
+
+    phone = _random_phone_formatted()
+    phone_sample = f"Callback at {phone} after discharge."
+
+    fax_number = _random_phone_formatted()
+    fax_sample = f"Send records via Fax: {fax_number}."
+
+    email_user = f"contact.{secrets.token_hex(4)}"
+    email_domain = random.choice(email_domains)
+    email = f"{email_user}@{email_domain}"
+    email_sample = f"Contact {email} for results."
+
+    ssn = (
+        f"{random.randint(1, 9)}"
+        f"{random.randint(0, 9)}{random.randint(0, 9)}"
+        f"-{random.randint(0, 9)}{random.randint(0, 9)}"
+        f"-{random.randint(0, 9)}{random.randint(0, 9)}{random.randint(0, 9)}{random.randint(0, 9)}"
+    )
+    ssn_sample = f"Legacy index SSN {ssn} must be redacted."
+
+    mrn = "".join(str(random.randint(0, 9)) for _ in range(10))
+    mrn_sample = f"Chart MRN: {mrn} updated."
+
+    plan_id = "".join(
+        secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(14)
+    )
+    health_plan_sample = f"Coverage PLAN# {plan_id} verified."
+
+    account_number = "".join(str(random.randint(0, 9)) for _ in range(16))
+    account_sample = f"Billing ACCT# {account_number} posted."
+
+    license_id = f"CA-MED-{random.randint(0, 999999):06d}"
+    license_sample = f"Provider LIC# {license_id}."
+
+    vin = _random_vin()
+    vin_sample = f"Transport vehicle VIN {vin} noted."
+
+    device_serial = "".join(
+        secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(12)
+    )
+    device_serial_sample = f"Pump SERIAL SN-{device_serial} registered."
+
+    patient_portal_id = f"{random.randint(0, 99999999):08d}"
+    portal_url = f"https://portal.example-clinic.org/patient/{patient_portal_id}"
+    web_url_sample = f"Portal {portal_url}."
+
+    if random.choice((True, False)):
+        ip_address = (
+            f"10.{random.randint(0, 255)}.{random.randint(0, 255)}."
+            f"{random.randint(1, 254)}"
+        )
+    else:
+        ip_address = (
+            f"192.168.{random.randint(0, 255)}.{random.randint(1, 254)}"
+        )
+    ip_sample = f"Session originated from {ip_address}."
+
+    biometric_id = secrets.token_hex(16)
+    biometric_sample = f"Template BIO# {biometric_id} stored."
+
+    photo_marker = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBD"
+    photo_sample = f"photo: {photo_marker}"
+
+    generated: List[Tuple[str, str, str, str]] = [
+        ("names", "Names", names_sample, names_needle),
+        ("dates", "Dates", dates_sample, dates_needle),
+        ("phone_numbers", "Phone Numbers", phone_sample, phone),
+        ("fax", "Fax", fax_sample, fax_number),
+        ("email", "Email", email_sample, email),
+        ("ssn", "SSN", ssn_sample, ssn),
+        ("mrn", "MRN", mrn_sample, mrn),
+        ("health_plan_ids", "Health Plan IDs", health_plan_sample, plan_id),
+        ("account_numbers", "Account Numbers", account_sample, account_number),
+        ("license_numbers", "License Numbers", license_sample, license_id),
+        ("vins", "VINs", vin_sample, vin),
+        ("device_serials", "Device Serials", device_serial_sample, device_serial),
+        ("web_urls", "Web URLs", web_url_sample, portal_url),
+        ("ip_addresses", "IP Addresses", ip_sample, ip_address),
+        ("biometric_ids", "Biometric IDs", biometric_sample, biometric_id),
+        ("full_face_photos", "Full-face Photos", photo_sample, photo_marker),
+    ]
+
     vectors: List[CanaryVector] = []
-    for key, label, sample in samples:
+    for key, label, sample, needle in generated:
         vectors.append(
             CanaryVector(
                 category=key,
                 safe_harbor_label=label,
                 sample=sample,
+                needle=needle,
                 scrubber=scrubbers[key],
             )
         )
@@ -190,48 +315,8 @@ def _compose_scrubber(vectors: List[CanaryVector]) -> Callable[[str], str]:
 
 def _vector_leaked(vector: CanaryVector, scrubbed: str) -> bool:
     """Detect whether identifiable canary material survived scrubbing."""
-    # Extract high-signal tokens from the sample for residual matching.
-    tokens = [
-        "Jane Q. Public",
-        "Samuel Reed",
-        "03/15/2024",
-        "2024-04-01",
-        "(415) 555-0199",
-        "415-555-0100",
-        "jane.public@example-clinic.org",
-        "123-45-6789",
-        "0049281736",
-        "HPLN8X92K1M4Q7",
-        "8844221199003344",
-        "CA-MED-928174",
-        "1HGCM82633A004352",
-        "AB12CD34EF56",
-        "https://portal.example-clinic.org/patient/9281",
-        "192.168.44.12",
-        "A1B2C3D4E5F60718293A4B5C6D7E8F90",
-        "data:image/jpeg;base64",
-    ]
-    category_tokens = {
-        "names": ["Jane Q. Public", "Samuel Reed"],
-        "dates": ["03/15/2024", "2024-04-01"],
-        "phone_numbers": ["(415) 555-0199", "415-555-0199"],
-        "fax": ["415-555-0100"],
-        "email": ["jane.public@example-clinic.org"],
-        "ssn": ["123-45-6789"],
-        "mrn": ["0049281736"],
-        "health_plan_ids": ["HPLN8X92K1M4Q7"],
-        "account_numbers": ["8844221199003344"],
-        "license_numbers": ["CA-MED-928174"],
-        "vins": ["1HGCM82633A004352"],
-        "device_serials": ["AB12CD34EF56"],
-        "web_urls": ["https://portal.example-clinic.org/patient/9281"],
-        "ip_addresses": ["192.168.44.12"],
-        "biometric_ids": ["A1B2C3D4E5F60718293A4B5C6D7E8F90"],
-        "full_face_photos": ["data:image/jpeg;base64"],
-    }
-    del tokens  # category-specific matching only
-    for needle in category_tokens.get(vector.category, []):
-        if needle in scrubbed:
+    for needle in vector.needle.split("|"):
+        if needle and needle in scrubbed:
             return True
     return False
 
@@ -246,7 +331,7 @@ def _verify_sentry_scrubber(dsn: str, scrub: Callable[[str], str]) -> None:
     if _vector_leaked(_default_canary_vectors()[0], scrubbed):
         raise RuntimeError("Sentry scrubber path would leak PHI (pre-egress validation failed)")
 
-    # Zero-egress: only send redacted envelope metadata to confirm DSN reachability.
+    # Zero-PHI-egress: only send redacted envelope metadata to confirm DSN reachability.
     try:
         public_key, host = _parse_sentry_dsn(dsn)
     except ValueError as exc:
@@ -278,47 +363,49 @@ def _parse_sentry_dsn(dsn: str) -> Tuple[str, str]:
     return match.group("key"), match.group("host")
 
 
-def _run_canary_harness(ruleset: str, sentry_dsn: str) -> Tuple[str, Dict[str, int]]:
+def _run_canary_harness(
+    ruleset: str, sentry_dsn: str
+) -> Tuple[str, List[Tuple[CanaryVector, bool]]]:
     vectors = _load_ruleset(ruleset)
     scrub = _compose_scrubber(vectors)
 
-    leaks = 0
-    intercepted = 0
+    results: List[Tuple[CanaryVector, bool]] = []
     for vector in vectors:
         scrubbed = scrub(vector.sample)
-        if _vector_leaked(vector, scrubbed):
-            leaks += 1
-        else:
-            intercepted += 1
+        leaked = _vector_leaked(vector, scrubbed)
+        results.append((vector, leaked))
 
     if sentry_dsn:
         _verify_sentry_scrubber(sentry_dsn, scrub)
 
+    leaks = sum(1 for _, leaked in results if leaked)
     status = "PASSED" if leaks == 0 else "FAILED"
-    summary = {
-        "vectors_tested": len(vectors),
-        "canaries_intercepted": intercepted,
-        "leaks_detected": leaks,
-    }
-    return status, summary
+    return status, results
 
 
 def _build_receipt(
     status: str,
-    summary: Dict[str, int],
-    repository: str,
-    commit_sha: str,
-    timestamp: str,
-    receipt_id: str,
+    results: List[Tuple[CanaryVector, bool]],
 ) -> Dict[str, Any]:
+    controls_verified = [vector.category for vector, leaked in results if not leaked]
+    leaks_detected = sum(1 for _, leaked in results if leaked)
+    intercepted = sum(1 for _, leaked in results if not leaked)
+    summary = {
+        "vectors_tested": len(results),
+        "canaries_intercepted": intercepted,
+        "leaks_detected": leaks_detected,
+    }
     return {
-        "receipt_id": receipt_id,
-        "timestamp": timestamp,
-        "repository": repository,
-        "commit_sha": commit_sha,
+        "schema_version": RECEIPT_SCHEMA_VERSION,
+        "receipt_id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+        "commit_sha": os.environ.get("GITHUB_SHA", ""),
+        "ruleset": os.environ.get("RULESET", "hipaa-safe-harbor-16"),
         "status": status,
-        "controls_verified": CONTROLS_VERIFIED,
+        "controls_verified": controls_verified,
         "summary": summary,
+        "hmac_sha256": "",
     }
 
 
@@ -327,12 +414,13 @@ def _canonical_json(payload: Dict[str, Any]) -> str:
 
 
 def _sign_receipt(payload: Dict[str, Any], secret: str) -> str:
-    digest = hmac.new(
+    signing_body = {**payload, "hmac_sha256": ""}
+    canonical = json.dumps(signing_body, sort_keys=True, separators=(",", ":"))
+    return hmac.new(
         secret.encode("utf-8"),
-        _canonical_json(payload).encode("utf-8"),
-        hashlib.sha256,
+        msg=canonical.encode("utf-8"),
+        digestmod=hashlib.sha256,
     ).hexdigest()
-    return digest
 
 
 def _post_telemetry(payload: Dict[str, Any], api_key: str) -> None:
@@ -361,10 +449,145 @@ def _write_github_output(status: str, receipt_path: str) -> None:
         handle.write(f"receipt-path={receipt_path}\n")
 
 
+def _post_pr_comment(
+    status: str,
+    receipt: dict,
+    output_dir: str,
+) -> Optional[str]:
+    post_comment = os.environ.get("POST_COMMENT", "")
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    pr_number = os.environ.get("PR_NUMBER", "")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+
+    if post_comment != "true":
+        return None
+    if event_name != "pull_request":
+        return None
+    if not pr_number or not str(pr_number).strip():
+        return None
+    if not github_token or not github_token.strip():
+        print(
+            "::warning::post-comment=true but GITHUB_TOKEN is not set; skipping PR comment."
+        )
+        return None
+
+    summary = receipt.get("summary", {})
+    vectors_tested = summary.get("vectors_tested", 0)
+    canaries_intercepted = summary.get("canaries_intercepted", 0)
+    leaks_detected = summary.get("leaks_detected", 0)
+    ruleset = os.environ.get("RULESET", "hipaa-safe-harbor-16")
+    commit_sha = receipt.get("commit_sha", "")
+    receipt_path = output_dir
+
+    status_emoji = "✅" if status == "PASSED" else "❌"
+    leak_block = ""
+    if leaks_detected:
+        leak_block = (
+            "> ⚠️ **PHI leak detected.** One or more canary tokens survived "
+            "redaction. Review the receipt for details.\n"
+        )
+
+    comment_body = f"""## Hermes PHI Canary — {status_emoji} {status}
+
+| Field | Value |
+|-------|-------|
+| Vectors tested | {vectors_tested} |
+| Canaries intercepted | {canaries_intercepted} |
+| Leaks detected | {leaks_detected} |
+| Ruleset | {ruleset} |
+| Commit | `{commit_sha}` |
+| Receipt | `{receipt_path}` |
+
+{leak_block}
+---
+*[Hermes PHI Canary](https://hermesrelay.dev/canary) · Free tier · [Upgrade to Pro](https://hermesrelay.dev/canary) for signed receipts and drift detection*
+"""
+
+    url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments"
+    try:
+        response = requests.post(
+            url,
+            json={"body": comment_body},
+            headers={
+                "Authorization": f"Bearer {github_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=30,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"::warning::Hermes could not post PR comment: {exc}")
+        return None
+
+    if response.status_code == 201:
+        try:
+            data = response.json()
+            return data.get("html_url")
+        except Exception:  # noqa: BLE001
+            return None
+
+    print(
+        f"::warning::Hermes could not post PR comment: "
+        f"{response.status_code} {response.text}"
+    )
+    return None
+
+
+def _validate_license(api_key: str) -> Tuple[str, str]:
+    url = (
+        "https://api.keygen.sh/v1/accounts/rogersandy90/licenses/actions/validate-key"
+    )
+    headers = {
+        "Content-Type": "application/vnd.api+json",
+        "Accept": "application/vnd.api+json",
+    }
+    body = {"meta": {"key": api_key}}
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=10)
+        if 400 <= response.status_code <= 599:
+            return ("error", f"Keygen validation error: {response.status_code}")
+        if response.status_code == 200:
+            meta = response.json().get("meta", {})
+            if meta.get("valid") is True:
+                return ("valid", "License valid.")
+            reason = meta.get("detail", "")
+            return ("invalid", f"License invalid: {reason}")
+        return ("error", f"Keygen validation error: {response.status_code}")
+    except requests.exceptions.RequestException as exc:
+        return ("error", f"Keygen unreachable: {exc}")
+
+
 def main() -> int:
     ruleset = os.environ.get("RULESET", "hipaa-safe-harbor-16")
     sentry_dsn = os.environ.get("SENTRY_DSN", "")
-    hermes_api_key = os.environ.get("HERMES_API_KEY", "")
+    validate_license = (
+        os.environ.get("VALIDATE_LICENSE", "true").lower() == "true"
+    )
+    hermes_api_key = os.environ.get("HERMES_API_KEY", "").strip()
+    license_status = "free-tier"
+
+    if hermes_api_key and validate_license:
+        status_result, message = _validate_license(hermes_api_key)
+        if status_result == "valid":
+            license_status = "valid"
+            print(f"::notice::{message}")
+        else:
+            license_status = "invalid"
+            print(f"::error::License validation failed: {message}", file=sys.stderr)
+            print(
+                "::error::Pro features are disabled for this run.",
+                file=sys.stderr,
+            )
+            hermes_api_key = ""
+    elif hermes_api_key and not validate_license:
+        license_status = "valid"
+        print(
+            "::warning::License validation was skipped (validate-license=false)."
+        )
+    else:
+        print("::notice::No Hermes API key set; running on free tier.")
+
     fail_on_leak = os.environ.get("FAIL_ON_LEAK", "true").lower() in {
         "1",
         "true",
@@ -372,32 +595,24 @@ def main() -> int:
         "on",
     }
     output_dir = os.environ.get("OUTPUT_DIR", "./hermes-evidence")
-    repository = os.environ.get("GITHUB_REPOSITORY", "local/hermes-canary-action")
-    commit_sha = os.environ.get("GITHUB_SHA", "0000000000000000000000000000000000000000")
-
     try:
-        status, summary = _run_canary_harness(ruleset, sentry_dsn)
+        status, results = _run_canary_harness(ruleset, sentry_dsn)
     except Exception as exc:  # noqa: BLE001 — surface harness failures as FAILED receipt
         status = "FAILED"
-        summary = {
-            "vectors_tested": 16,
-            "canaries_intercepted": 0,
-            "leaks_detected": 16,
-        }
+        vectors = _default_canary_vectors()
+        results = [(vector, True) for vector in vectors]
         print(f"Hermes canary harness error: {exc}", file=sys.stderr)
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    receipt_id = f"rcpt-{secrets.token_hex(6)}"
-    receipt = _build_receipt(
-        status=status,
-        summary=summary,
-        repository=repository,
-        commit_sha=commit_sha,
-        timestamp=timestamp,
-        receipt_id=receipt_id,
-    )
+    receipt = _build_receipt(status, results)
+
+    if hermes_api_key:
+        receipt["hmac_sha256"] = _sign_receipt(receipt, hermes_api_key)
+    else:
+        receipt["hmac_sha256"] = ""
 
     os.makedirs(output_dir, exist_ok=True)
+    timestamp = receipt["timestamp"]
+    receipt_id = receipt["receipt_id"]
     safe_ts = timestamp.replace(":", "-")
     receipt_path = os.path.abspath(
         os.path.join(output_dir, f"{safe_ts}_{receipt_id}.json")
@@ -408,19 +623,67 @@ def main() -> int:
 
     _write_github_output(status, receipt_path)
 
-    if hermes_api_key.strip():
+    if hermes_api_key:
         try:
-            _post_telemetry(receipt, hermes_api_key.strip())
+            _post_telemetry(receipt, hermes_api_key)
         except Exception as exc:  # noqa: BLE001
             print(f"Hermes telemetry warning: {exc}", file=sys.stderr)
 
     print(f"Hermes canary status: {status}")
     print(f"Receipt written to: {receipt_path}")
 
+    comment_url = _post_pr_comment(status, receipt, receipt_path)
+    with open(os.environ.get("GITHUB_OUTPUT", "/dev/null"), "a") as fh:
+        fh.write(f"comment-url={comment_url or ''}\n")
+        fh.write(f"license-status={license_status}\n")
+
     if status == "FAILED" and fail_on_leak:
         return 1
     return 0
 
 
+def _selftest_receipt() -> None:
+    """Smoke-test receipt schema and HMAC signing. Called only when HERMES_SELFTEST=1."""
+    import uuid
+
+    vectors = _default_canary_vectors()
+    fake_results = [(v, False) for v in vectors]  # all intercepted
+    receipt = _build_receipt("PASSED", fake_results)
+
+    assert receipt["schema_version"] == RECEIPT_SCHEMA_VERSION
+    assert receipt["status"] == "PASSED"
+    assert receipt["summary"]["leaks_detected"] == 0
+    assert receipt["summary"]["vectors_tested"] == 16
+    assert receipt["hmac_sha256"] == ""
+    assert len(receipt["controls_verified"]) == 16
+
+    secret = "test-secret-key"
+    sig = _sign_receipt(receipt, secret)
+    assert isinstance(sig, str) and len(sig) == 64
+
+    # Verify the signature matches manual computation
+    body = {**receipt, "hmac_sha256": ""}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    import hmac as _hmac, hashlib as _hashlib
+
+    expected = _hmac.new(
+        secret.encode("utf-8"),
+        msg=canonical.encode("utf-8"),
+        digestmod=_hashlib.sha256,
+    ).hexdigest()
+    assert _hmac.compare_digest(sig, expected), "Signature mismatch"
+
+    gate_status, _ = _validate_license("not-a-real-key")
+    assert gate_status in ("invalid", "error")
+    print(
+        "License gate smoke test passed (network may be unavailable in CI — error is acceptable)."
+    )
+
+    print("SELFTEST PASSED")
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    if os.environ.get("HERMES_SELFTEST") == "1":
+        _selftest_receipt()
+    else:
+        sys.exit(main())

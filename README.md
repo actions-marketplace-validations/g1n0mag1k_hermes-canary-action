@@ -2,9 +2,9 @@
 
 # hermes-canary-action
 
-Zero-egress synthetic PHI canary tests and tamper-evident compliance receipts for healthtech CI/CD pipelines. Drop this composite GitHub Action into your workflow to verify that error monitoring scrubbers (for example Sentry `before_send`, Relay processors, or Drata CCT-linked policies) redact all **16 HIPAA Safe Harbor** identifier categories before telemetry leaves your boundary.
+Zero-PHI-egress synthetic PHI canary tests and tamper-evident compliance receipts for healthtech CI/CD pipelines. Drop this composite GitHub Action into your workflow to verify that error monitoring scrubbers (for example Sentry `before_send`, Relay processors, or Drata CCT-linked policies) redact all **16 HIPAA Safe Harbor** identifier categories before telemetry leaves your boundary.
 
-## How zero-egress canary mechanics work
+## How zero-PHI-egress canary mechanics work
 
 Traditional PHI tests often require copying realistic patient data into staging or sending payloads to third-party observability vendors. That increases breach surface and complicates BAA scope.
 
@@ -39,6 +39,12 @@ No real patient data is used. Canary strings never leave the runner in cleartext
 | 15 | Biometric IDs | `BIO#` hex templates |
 | 16 | Full-face photos | `photo: data:image/…` markers |
 
+## Free tier
+
+- Full 16-category synthetic Safe Harbor canary harness
+- Local JSON compliance receipts on every run
+- PR comment with pass/fail summary
+
 ## Quick start
 
 ```yaml
@@ -56,7 +62,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Hermes PHI canary
-        uses: your-org/hermes-canary-action@v1
+        uses: g1n0mag1k/hermes-canary-action@v1
         with:
           sentry-dsn: ${{ secrets.SENTRY_DSN }}
           ruleset: hipaa-safe-harbor-16
@@ -71,6 +77,10 @@ jobs:
           path: ./hermes-evidence/*.json
 ```
 
+### PR comment
+
+When triggered on a pull request, Hermes posts a pass/fail summary comment automatically (requires `pull-requests: write` permission). Set `post-comment: 'false'` to disable.
+
 ## Hermes Relay Pro and Drata CCT syncing
 
 When you attach a **Hermes Relay Pro** API key, the action signs the receipt with **HMAC-SHA256** and POSTs it to Hermes Relay. Drata (and similar GRC platforms) can ingest those receipts via CCT sync to prove continuous scrubber verification tied to `repository` and `commit_sha`.
@@ -78,7 +88,7 @@ When you attach a **Hermes Relay Pro** API key, the action signs the receipt wit
 ```yaml
       - name: Run Hermes PHI canary (Relay Pro)
         id: canary
-        uses: your-org/hermes-canary-action@v1
+        uses: g1n0mag1k/hermes-canary-action@v1
         with:
           sentry-dsn: ${{ secrets.SENTRY_DSN }}
           hermes-api-key: ${{ secrets.HERMES_API_KEY }}
@@ -90,6 +100,10 @@ When you attach a **Hermes Relay Pro** API key, the action signs the receipt wit
 
 Telemetry endpoint: `POST https://api.hermesrelay.dev/v1/telemetry/receipt`  
 Header: `X-Hermes-Signature-256` — HMAC-SHA256 of the canonical JSON body using `hermes-api-key` as the secret.
+
+## Pro license validation
+
+When `hermes-api-key` is set Hermes validates the key against the Keygen.sh license endpoint before running. An invalid or expired key disables Pro features (signing and telemetry upload) for that run without failing the job on canary results. Set `validate-license` to `false` to skip validation (not recommended outside of local testing). The `license-status` output reports one of: `valid`, `invalid`, `error`, or `free-tier`.
 
 ## Inputs
 
@@ -110,28 +124,47 @@ Header: `X-Hermes-Signature-256` — HMAC-SHA256 of the canonical JSON body usin
 
 ## Receipt schema
 
-Each run writes `{output-dir}/{timestamp}_{receipt_id}.json`:
+Every run writes a JSON receipt to `output-dir` (default `./hermes-evidence`). Free tier receipts have `hmac_sha256: ""`. Pro receipts have a populated HMAC-SHA256 signature over the canonical receipt body.
 
 ```json
 {
-  "receipt_id": "rcpt-<12-hex-characters>",
-  "timestamp": "<ISO-8601-UTC-timestamp>",
-  "repository": "<GITHUB_REPOSITORY>",
-  "commit_sha": "<GITHUB_SHA>",
+  "schema_version": "1.0",
+  "receipt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": "2026-10-02T06:00:00Z",
+  "repository": "your-org/your-repo",
+  "commit_sha": "abc123",
+  "ruleset": "hipaa-safe-harbor-16",
   "status": "PASSED",
   "controls_verified": [
-    "HIPAA-164.312-e-1",
-    "SOC2-CC6.1"
+    "names", "dates", "phone_numbers", "fax", "email", "ssn",
+    "mrn", "health_plan_ids", "account_numbers", "license_numbers",
+    "vins", "device_serials", "web_urls", "ip_addresses",
+    "biometric_ids", "full_face_photos"
   ],
   "summary": {
     "vectors_tested": 16,
     "canaries_intercepted": 16,
     "leaks_detected": 0
-  }
+  },
+  "hmac_sha256": ""
 }
 ```
 
-Receipts are suitable as evidence for HIPAA **164.312(e)(1)** transmission integrity and SOC 2 **CC6.1** logical access / data protection control testing when paired with your scrubber configuration.
+## Verifying a Pro receipt
+
+```python
+import hmac, hashlib, json
+
+def verify_receipt(receipt: dict, api_key: str) -> bool:
+    body = {**receipt, "hmac_sha256": ""}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    expected = hmac.new(
+        api_key.encode("utf-8"),
+        msg=canonical.encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, receipt["hmac_sha256"])
+```
 
 ## Local development
 
